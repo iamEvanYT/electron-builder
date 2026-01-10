@@ -29,6 +29,21 @@ export class NpmNodeModulesCollector extends NodeModulesCollector<NpmDependency,
       if (this.isDuplicatedNpmDependency(value)) {
         continue
       }
+
+      // Skip dependencies without a valid path (e.g., uninstalled optional dependencies)
+      // This commonly happens with platform-specific optional deps like sharp's native bindings
+      if (!value.path || !value.version) {
+        log.debug({ name: value.name, version: value.version, path: value.path }, "dependency missing path or version, skipping")
+        continue
+      }
+
+      // Check if the dependency path actually exists
+      const realPath = await this.cache.realPath[value.path].catch(() => null)
+      if (!realPath || !(await this.cache.exists[realPath])) {
+        log.debug({ name: value.name, version: value.version, path: value.path }, "dependency path does not exist, skipping (likely uninstalled optional dependency)")
+        continue
+      }
+
       // Use the key (alias name) instead of value.name for npm aliased packages
       // e.g., { "foo": { name: "@scope/bar", ... } } should be stored as "foo@version"
       // This ensures aliased packages are copied to the correct location in node_modules
@@ -64,6 +79,13 @@ export class NpmNodeModulesCollector extends NodeModulesCollector<NpmDependency,
         // Use the key (alias name) for aliased packages to match how they're stored in allDependencies
         const normalizedName = packageName !== dependency.name ? packageName : dependency.name
         const childDependencyId = `${normalizedName}@${dependency.version}`
+
+        // Skip dependencies that weren't collected (e.g., missing optional deps with no valid path)
+        if (!this.allDependencies.has(childDependencyId)) {
+          log.debug({ name: normalizedName, version: dependency.version }, "dependency not in allDependencies, skipping (likely uninstalled optional dependency)")
+          continue
+        }
+
         await this.extractProductionDependencyGraph(dependency, childDependencyId)
         collectedDependencies.push(childDependencyId)
       }
